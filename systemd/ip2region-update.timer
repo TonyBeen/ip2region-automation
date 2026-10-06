@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for ip2region database updates every six hours
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=6h
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=Update ip2region IPv4 and IPv6 databases
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ip2region
+Group=ip2region
+EnvironmentFile=-/etc/default/ip2region-update
+ExecStart=/opt/ip2region-automation/venv/bin/python /opt/ip2region-automation/updater.py
+StateDirectory=ip2region
+StateDirectoryMode=0750
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ip2region
