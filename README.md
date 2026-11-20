@@ -15,11 +15,13 @@
 │   └── server/             # Go 高性能 HTTP 查询服务源码
 │       ├── main.go
 │       └── main_test.go
+├── seed/                   # 仓库内置的最新双栈 xdb 离线种子（开箱即用，无需等待下载）
 ├── submodules/
 │   └── ip2region/          # 官方 lionsoul2014/ip2region 子模块 (tag: v3.19.0)
 ├── nginx/
 │   └── ifconfig.conf       # Nginx /ifconfig 前缀反向代理配置示例
 ├── scripts/
+│   ├── update_seed.py      # 一键更新本地 seed/ 离线种子数据库到上游最新版本
 │   ├── deploy.sh           # Linux 宿主机部署脚本
 │   ├── cleanup.sh          # 历史版本与临时目录安全清理脚本
 │   └── entrypoint.sh       # Docker 容器启动入口
@@ -258,3 +260,13 @@ python3 updater.py --data-dir /var/lib/ip2region --reload-command 'curl -s -X PO
 # 默认保留当前版本和最近两个历史版本
 sudo bash scripts/cleanup.sh --keep 2 --yes
 ```
+
+### 一键更新仓库自带的离线 xdb 种子数据库
+
+本项目自带 `seed/` 离线种子，随代码一同分发。当后续希望更新仓库自带的兜底数据库时，只需执行：
+
+```bash
+python3 scripts/update_seed.py
+```
+
+脚本会自动检测 `fa1seut0pia/ip2region-xdb` 的最新发布，下载并校验双栈 xdb 数据库与哈希清单，完成后即可直接提交代码。

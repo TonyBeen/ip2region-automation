@@ -62,20 +62,23 @@ trap cleanup SIGTERM SIGINT
 
 # 2. Seed fallback: if no database exists and seed files are present, initialize immediately
 if [[ ! -e "$DATA_DIR/current" ]] && [[ -f "/app/seed/ip2region_v4.xdb" && -f "/app/seed/ip2region_v6.xdb" ]]; then
-  echo "[SEED] Initializing database from embedded seed..."
-  mkdir -p "$DATA_DIR/releases/seed"
-  cp /app/seed/ip2region_v4.xdb "$DATA_DIR/releases/seed/"
-  cp /app/seed/ip2region_v6.xdb "$DATA_DIR/releases/seed/"
-  ln -sfn releases/seed "$DATA_DIR/current"
+  SEED_VERSION="initial"
+  if [[ -f "/app/seed/manifest.json" ]]; then
+    SEED_VERSION=$(python3 -c 'import json; print(json.load(open("/app/seed/manifest.json")).get("version", "initial"))' 2>/dev/null || echo "initial")
+  fi
+  echo "[SEED] Initializing database from embedded seed (version: $SEED_VERSION)..."
+  mkdir -p "$DATA_DIR/releases/$SEED_VERSION"
+  cp -r /app/seed/* "$DATA_DIR/releases/$SEED_VERSION/"
+  ln -sfn "releases/$SEED_VERSION" "$DATA_DIR/current"
   # Notify Go server to load seed
   sleep 1
   curl -s -f -X POST "$RELOAD_URL" || true
-  echo "[SEED] Seed database loaded. Upstream update will proceed in background."
+  echo "[SEED] Seed database ($SEED_VERSION) loaded. Upstream update will proceed in background."
 fi
 
 # 3. Background updater loop
 (
-  # If still no database exists (no seed), retry rapidly every 30s until first success
+  # If still no database exists (e.g. no seed), retry rapidly every 30s until first success
   while [[ ! -e "$DATA_DIR/current" ]]; do
     echo "[INIT] No database found at $DATA_DIR/current. Triggering initial download..."
     if python3 /app/updater.py --data-dir "$DATA_DIR" --reload-command "$IP2REGION_RELOAD_COMMAND"; then
@@ -87,13 +90,8 @@ fi
     fi
   done
 
-  # If database was loaded from seed, trigger an immediate background check for latest release
-  if [[ -e "$DATA_DIR/current" ]] && [[ "$(readlink "$DATA_DIR/current")" == "releases/seed" ]]; then
-    echo "[INIT] Seed active. Checking for latest upstream release..."
-    python3 /app/updater.py --data-dir "$DATA_DIR" --reload-command "$IP2REGION_RELOAD_COMMAND" || {
-      echo "[WARN] Initial upstream update failed; seed database will remain active until next cycle."
-    }
-  fi
+  # Initial check: if seed was loaded, check once to see if upstream has an even newer version
+  python3 /app/updater.py --data-dir "$DATA_DIR" --reload-command "$IP2REGION_RELOAD_COMMAND" || true
 
   # Regular periodic check loop
   while true; do
