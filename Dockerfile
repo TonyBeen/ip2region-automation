@@ -19,6 +19,8 @@ COPY --from=builder /bin/ip2region-server /usr/local/bin/ip2region-server
 COPY updater.py /app/updater.py
 COPY scripts/cleanup.sh /app/scripts/cleanup.sh
 COPY scripts/entrypoint.sh /app/scripts/entrypoint.sh
+COPY submodules/ip2region/data/ip2region_v4.xdb /app/seed/ip2region_v4.xdb
+COPY submodules/ip2region/data/ip2region_v6.xdb /app/seed/ip2region_v6.xdb
 
 RUN chmod +x /usr/local/bin/ip2region-server /app/scripts/cleanup.sh /app/scripts/entrypoint.sh
 

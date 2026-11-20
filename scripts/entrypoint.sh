@@ -60,18 +60,42 @@ cleanup() {
 }
 trap cleanup SIGTERM SIGINT
 
-# 2. If current database does not exist, run initial sync in background and reload
-if [[ ! -e "$DATA_DIR/current" ]]; then
-  echo "[INIT] No database found at $DATA_DIR/current. Triggering initial download..."
-  (
-    python3 /app/updater.py --data-dir "$DATA_DIR" --reload-command "$IP2REGION_RELOAD_COMMAND" || {
-      echo "[WARN] Initial download failed (network issue?). Will retry in scheduled loop."
-    }
-  ) &
+# 2. Seed fallback: if no database exists and seed files are present, initialize immediately
+if [[ ! -e "$DATA_DIR/current" ]] && [[ -f "/app/seed/ip2region_v4.xdb" && -f "/app/seed/ip2region_v6.xdb" ]]; then
+  echo "[SEED] Initializing database from embedded seed..."
+  mkdir -p "$DATA_DIR/releases/seed"
+  cp /app/seed/ip2region_v4.xdb "$DATA_DIR/releases/seed/"
+  cp /app/seed/ip2region_v6.xdb "$DATA_DIR/releases/seed/"
+  ln -sfn releases/seed "$DATA_DIR/current"
+  # Notify Go server to load seed
+  sleep 1
+  curl -s -f -X POST "$RELOAD_URL" || true
+  echo "[SEED] Seed database loaded. Upstream update will proceed in background."
 fi
 
-# 3. Background periodic updater loop
+# 3. Background updater loop
 (
+  # If still no database exists (no seed), retry rapidly every 30s until first success
+  while [[ ! -e "$DATA_DIR/current" ]]; do
+    echo "[INIT] No database found at $DATA_DIR/current. Triggering initial download..."
+    if python3 /app/updater.py --data-dir "$DATA_DIR" --reload-command "$IP2REGION_RELOAD_COMMAND"; then
+      echo "[INIT] Initial database downloaded and loaded successfully!"
+      break
+    else
+      echo "[WARN] Initial download failed. Retrying in 30 seconds..."
+      sleep 30
+    fi
+  done
+
+  # If database was loaded from seed, trigger an immediate background check for latest release
+  if [[ -e "$DATA_DIR/current" ]] && [[ "$(readlink "$DATA_DIR/current")" == "releases/seed" ]]; then
+    echo "[INIT] Seed active. Checking for latest upstream release..."
+    python3 /app/updater.py --data-dir "$DATA_DIR" --reload-command "$IP2REGION_RELOAD_COMMAND" || {
+      echo "[WARN] Initial upstream update failed; seed database will remain active until next cycle."
+    }
+  fi
+
+  # Regular periodic check loop
   while true; do
     sleep "$INTERVAL_SECONDS"
     echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] Checking for updates..."
