@@ -1,0 +1,24 @@
+services:
+  ip2region:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ip2region-service:latest
+    container_name: ip2region-service
+    restart: unless-stopped
+    ports:
+      - "28080:28080"
+    environment:
+      - PATH_PREFIX=/ifconfig
+      - PORT=28080
+      - CACHE_POLICY=vindex
+      - SEARCHERS=50
+      - UPDATE_INTERVAL=6h
+      - IP2REGION_HTTP_TIMEOUT=300
+      - TZ=Asia/Shanghai
+    volumes:
+      - ip2region_data:/var/lib/ip2region
+
+volumes:
+  ip2region_data:
+    driver: local

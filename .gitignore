@@ -25,6 +25,7 @@
 
 # Fortran module files
 *.mod
+!go.mod
 *.smod
 
 # Compiled Static libraries
@@ -75,3 +76,5 @@ venv/
 
 # Local updater state
 data/
+bin/
+

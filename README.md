@@ -1,93 +1,260 @@
-# ip2region automation
+# ip2region automation & query service
 
-一个用于 Linux 的 Python updater，定时检查 `fa1seut0pia/ip2region-xdb` 最新 Release，下载 IPv4/IPv6 xdb，校验文件大小和 GitHub 提供的 SHA-256 后再一次性切换当前版本。
+本项目是一个集成了 **数据库自动化定时更新** 与 **Go 高性能离线 IP 查询微服务** 的一体化解决方案：
+1. **自动更新器**：定时拉取 `fa1seut0pia/ip2region-xdb` 最新 Release，下载 IPv4/IPv6 双栈 xdb，校验 SHA-256 和文件大小，通过原子软链无缝切换版本。
+2. **Go 高性能查询服务**：直接基于官方 `lionsoul2014/ip2region` (v3.19.0) 子模块实现，微秒级响应，支持高并发，提供类似 `ifconfig.me` / `ip.sb` 的 IP 查询 API，支持 **Nginx 前缀反代（默认 `/ifconfig`）** 与 **零停机热重载**。
+3. **开箱即用 Docker 部署**：基于多阶段构建的轻量级镜像（< 70MB），一键拉起服务与自动同步守护进程。
 
-## 更新方式
+---
 
-数据目录默认是 `/var/lib/ip2region`：
+## 目录结构
 
 ```text
-/var/lib/ip2region/
-├── current -> releases/<version>
-├── releases/<version>/
-│   ├── ip2region_v4.xdb
-│   ├── ip2region_v6.xdb
-│   └── manifest.json
-└── staging/
+.
+├── cmd/
+│   └── server/             # Go 高性能 HTTP 查询服务源码
+│       ├── main.go
+│       └── main_test.go
+├── submodules/
+│   └── ip2region/          # 官方 lionsoul2014/ip2region 子模块 (tag: v3.19.0)
+├── nginx/
+│   └── ifconfig.conf       # Nginx /ifconfig 前缀反向代理配置示例
+├── scripts/
+│   ├── deploy.sh           # Linux 宿主机部署脚本
+│   ├── cleanup.sh          # 历史版本与临时目录安全清理脚本
+│   └── entrypoint.sh       # Docker 容器启动入口
+├── systemd/                # systemd timer & service 配置
+├── updater.py              # 数据下载、校验、原子切换与回滚核心
+├── Dockerfile              # Docker 多阶段构建文件
+├── docker-compose.yml      # Docker Compose 编排文件
+└── go.mod                  # Go 模块定义（本地指向子模块）
 ```
 
-运行中的程序应从 `current/ip2region_v4.xdb` 和 `current/ip2region_v6.xdb` 读取。更新器先把两个文件完整下载到 staging，再核对大小和 SHA-256，生成 manifest 并将目录移入 releases，最后用原子 symlink 替换切换版本。失败时不会激活不完整版本。使用 `flock` 防止定时任务重叠。
+---
 
-更新器默认不假定消费 xdb 的服务或其 reload API。配置 `IP2REGION_RELOAD_COMMAND` 后，切换成功会执行该命令；命令可从环境变量 `IP2REGION_CURRENT` 和 `IP2REGION_VERSION` 读取新路径及版本。命令失败会把 `current` 原子回切到之前的版本。
+## 快速开始 (Docker 部署)
 
-## 手动运行
-
-需要 Python 3.5+，无第三方 Python 依赖：
-
-```sh
-python3 updater.py --data-dir ./data
-```
-
-也可通过参数设置 HTTP 超时和 reload 命令：
-
-```sh
-python3 updater.py \
-  --data-dir /var/lib/ip2region \
-  --timeout 120 \
-  --reload-command '/usr/local/bin/reload-ipinfo'
-```
-
-## Linux systemd 部署
-
-系统需已安装 Python 3.5 和 venv 支持；更新器只用标准库，不需要安装 Python 包。部署脚本从仓库目录安装 updater、systemd 配置并启用定时器：
+推荐使用 Docker / Docker Compose 进行一键部署：
 
 ```bash
-sudo bash scripts/deploy.sh
+# 1. 递归克隆包含子模块的仓库（若已克隆，执行 git submodule update --init --recursive）
+git submodule update --init --recursive
+
+# 2. 启动服务
+docker compose up -d
 ```
 
-如果发行版把 venv 单独打包，请先安装 Python 3.5 对应的 venv 包。以后更新代码时，在仓库目录重新运行部署脚本即可。脚本会保留已有的 `/etc/default/ip2region-update` 配置。
+服务启动后：
+- 自动检测并拉取最新的 IPv4 与 IPv6 数据库。
+- 启动 Go 高性能查询服务（默认端口 `28080`，前缀路径 `/ifconfig`）。
+- 后台每 6 小时自动检查一次数据库更新，更新成功后通过 `/ifconfig/reload` 自动零停机热重载索引。
 
-`systemd` timer 启动后 5 分钟首次运行，随后每 6 小时检查一次；启动期间错过的任务会补跑。若要启用 reload，编辑 `/etc/default/ip2region-update`，设置 `IP2REGION_RELOAD_COMMAND`，并确保 `ip2region` 用户有权限执行该命令。
+---
 
-查看定时器状态和日志：
+## Nginx 反向代理配置 (/ifconfig)
 
-```sh
-systemctl list-timers ip2region-update.timer
-sudo systemctl start ip2region-update.service
-journalctl -u ip2region-update.service
+参考 [nginx/ifconfig.conf](file:///home/eular/VSCode/ip2region-automation/nginx/ifconfig.conf)：
+
+```nginx
+upstream ip2region_backend {
+    server 127.0.0.1:28080;
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    # 推荐配置：带 /ifconfig 前缀转发
+    location /ifconfig {
+        proxy_pass http://ip2region_backend;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Prefix /ifconfig;
+
+        # 开启 HTTP 1.1 keepalive 提升并发响应
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 10s;
+    }
+}
 ```
 
-## 清理旧版本
+> **注意**：服务内置路径自适应机制，无论是直接反向代理 `proxy_pass http://.../ifconfig;` 还是剥离前缀 `proxy_pass http://.../;`，均可无缝兼容。
 
-更新器会保留所有已发布版本，不会自动删除数据库。清理脚本按目录修改时间保留当前版本和最近两个版本，并清除上次被强制中断留下的 staging 临时目录。默认先列出待删内容并要求确认：
+---
+
+## API 查询接口说明
+
+所有接口均位于配置的前缀路径下（默认为 `/ifconfig`）：
+
+### 1. 查询访问者自身 IP（默认返回格式化 JSON）
+
+- **直接访问（默认返回 JSON，携带发送请求的公网 IP）**：
+  ```bash
+  curl http://your-domain.com/ifconfig
+  ```
+  返回示例：
+  ```json
+  {
+    "ip": "114.114.114.114",
+    "country": "中国",
+    "province": "江苏省",
+    "city": "南京市",
+    "isp": "114DNS",
+    "code": "CN",
+    "region": "中国|江苏省|南京市|114DNS|CN"
+  }
+  ```
+
+- **仅获取纯 IP 文本（方便 Shell 脚本提取）**：
+  ```bash
+  curl http://your-domain.com/ifconfig?format=ip
+  # 输出: 114.114.114.114
+  ```
+
+### 2. 查询指定 IPv4 或 IPv6 地址
+
+- **路径方式（默认返回 JSON）**：
+  ```bash
+  # 查询 IPv4
+  curl http://your-domain.com/ifconfig/1.1.1.1
+
+  # 查询 IPv6
+  curl http://your-domain.com/ifconfig/240e:3b7:3272:d8d0::1
+  ```
+
+- **参数方式**：
+  ```bash
+  curl "http://your-domain.com/ifconfig?ip=1.1.1.1"
+  ```
+
+### 3. 批量并发查询多个 IP（单次请求并发查询多个 IP）
+
+支持 GET 逗号分隔传参，以及 POST 提交 JSON 数组或每行一个 IP：
+
+- **GET 参数方式（逗号分隔多个 IP，支持 IPv4 与 IPv6 混查）**：
+  ```bash
+  curl "http://your-domain.com/ifconfig?ips=1.1.1.1,8.8.8.8,240e:3b7:3272:d8d0::1"
+  ```
+
+- **POST JSON 数组（推荐）**：
+  ```bash
+  curl -X POST "http://your-domain.com/ifconfig/batch" \
+    -H "Content-Type: application/json" \
+    -d '["1.1.1.1", "8.8.8.8", "114.114.114.114"]'
+  ```
+
+- **POST 对象或文本行**：
+  ```bash
+  # 支持 {"ips": [...]}
+  curl -X POST "http://your-domain.com/ifconfig" \
+    -d '{"ips": ["1.1.1.1", "8.8.8.8"]}'
+
+  # 或通过文本文件一行一个 IP 提交
+  curl -X POST "http://your-domain.com/ifconfig" --data-binary @ips.txt
+  ```
+
+返回示例（后端多协程并发处理后返回结果列表）：
+```json
+[
+  {
+    "ip": "1.1.1.1",
+    "country": "Australia",
+    "province": "Queensland",
+    "city": "Brisbane",
+    "code": "AU",
+    "region": "Australia|Queensland|Brisbane|0|AU"
+  },
+  {
+    "ip": "8.8.8.8",
+    "country": "United States",
+    "province": "California",
+    "isp": "Google LLC",
+    "code": "US",
+    "region": "United States|California|0|Google LLC|US"
+  }
+]
+```
+
+### 4. 健康检查与状态
 
 ```bash
-sudo bash scripts/cleanup.sh
+curl http://your-domain.com/ifconfig/healthz
+```
+返回示例：
+```json
+{
+  "loaded": true,
+  "loaded_at": "2026-11-20T14:38:53+08:00",
+  "prefix": "/ifconfig",
+  "status": "ok",
+  "v4_enabled": true,
+  "v6_enabled": true,
+  "manifest": {
+    "version": "2026.11.18",
+    "source": "fa1seut0pia/ip2region-xdb"
+  }
+}
 ```
 
-可用 `--keep` 调整要额外保留的旧版本数；`--yes` 跳过确认提示：
+### 5. 手动触发热重载 (Hot Reload)
 
 ```bash
-sudo bash scripts/cleanup.sh --keep 3
+curl -X POST http://your-domain.com/ifconfig/reload
+```
+服务在接收到请求后会原子切换内存索引，旧连接查询不受影响，平滑过渡。
+
+---
+
+## 环境变量配置
+
+在 `docker-compose.yml` 或宿主机环境中支持以下配置项：
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `PATH_PREFIX` | `/ifconfig` | 服务的前缀路径，留空或 `/` 则挂载在根路径 |
+| `PORT` | `28080` | HTTP 监听端口 |
+| `IP2REGION_DATA_DIR` | `/var/lib/ip2region` | 数据库存储路径 |
+| `CACHE_POLICY` | `vindex` | 缓存策略：`vindex`（512KB 向量索引，极低内存）、`content`（全内存，极速） |
+| `SEARCHERS` | `50` | 连接池/检索并发实例数 |
+| `UPDATE_INTERVAL` | `6h` | 自动检查上游更新的周期（如 `6h`、`12h`） |
+| `RELOAD_TOKEN` | 空 | 可选的重载密钥，配置后重载需携带 `X-Reload-Token` 头 |
+
+---
+
+## 宿主机直接运行 / 本地开发
+
+### 编译与运行 Go 查询服务
+
+```bash
+# 编译
+go build -o bin/ip2region-server ./cmd/server
+
+# 运行（前缀为 /ifconfig）
+IP2REGION_DATA_DIR=/var/lib/ip2region PATH_PREFIX=/ifconfig PORT=28080 ./bin/ip2region-server
+```
+
+### 单元测试
+
+```bash
+go test -v ./cmd/server
+```
+
+### 手动执行数据更新器
+
+```bash
+python3 updater.py --data-dir /var/lib/ip2region --reload-command 'curl -s -X POST http://127.0.0.1:28080/ifconfig/reload'
+```
+
+### 清理旧版本
+
+```bash
+# 默认保留当前版本和最近两个历史版本
 sudo bash scripts/cleanup.sh --keep 2 --yes
 ```
-
-清理脚本会获取与 updater 相同的文件锁，若更新正在运行会退出，避免删除正在使用的文件。不要手动删除 `current` 指向的目录。
-
-卸载定时任务但保留数据库：
-
-```sh
-sudo systemctl disable --now ip2region-update.timer
-sudo rm -f /etc/systemd/system/ip2region-update.service /etc/systemd/system/ip2region-update.timer
-sudo rm -f /etc/default/ip2region-update
-sudo systemctl daemon-reload
-```
-
-确认不再需要数据库后，可再删除 `/var/lib/ip2region`；确认不再需要 updater 后，可删除 `/opt/ip2region-automation`。
-
-## 运行约定
-
-- 上游 Release 必须包含 `ip2region_v4.xdb` 和 `ip2region_v6.xdb`，并提供 `sha256:<hex>` digest 与正数 size。
-- 每次更新两个数据库作为一个整体激活，避免 v4/v6 混用版本。
-- 老版本会保留在 `releases/`，便于排查和手动回滚；参考“清理旧版本”章节定期释放磁盘空间。
-- 应用需要跟随 `current` 符号链接访问文件，或在 reload 时重新打开文件。已打开的文件描述符不会因链接切换而自动指向新文件。
