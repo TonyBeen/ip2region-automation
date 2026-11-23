@@ -30,25 +30,31 @@ type Manifest struct {
 
 // IPInfo holds structured query result
 type IPInfo struct {
-	IP       string `json:"ip"`
-	Country  string `json:"country,omitempty"`
-	Province string `json:"province,omitempty"`
-	City     string `json:"city,omitempty"`
-	ISP      string `json:"isp,omitempty"`
-	Code     string `json:"code,omitempty"`
-	Region   string `json:"region"`
+	IP        string `json:"ip"`
+	Continent string `json:"continent"`
+	Country   string `json:"country"`
+	Province  string `json:"province"`
+	City      string `json:"city"`
+	District  string `json:"district"`
+	ISP       string `json:"isp"`
+	NetType   string `json:"net_type"`
+	Code      string `json:"code"`
+	Region    string `json:"region"`
 }
 
 // BatchIPResult holds result for batch IP query
 type BatchIPResult struct {
-	IP       string `json:"ip"`
-	Country  string `json:"country,omitempty"`
-	Province string `json:"province,omitempty"`
-	City     string `json:"city,omitempty"`
-	ISP      string `json:"isp,omitempty"`
-	Code     string `json:"code,omitempty"`
-	Region   string `json:"region,omitempty"`
-	Error    string `json:"error,omitempty"`
+	IP        string `json:"ip"`
+	Continent string `json:"continent"`
+	Country   string `json:"country"`
+	Province  string `json:"province"`
+	City      string `json:"city"`
+	District  string `json:"district"`
+	ISP       string `json:"isp"`
+	NetType   string `json:"net_type"`
+	Code      string `json:"code"`
+	Region    string `json:"region"`
+	Error     string `json:"error,omitempty"`
 }
 
 // App manages the ip2region service state and atomic hot-reloading
@@ -86,26 +92,74 @@ func cleanZero(val string) string {
 	return val
 }
 
+var continents = map[string]bool{
+	"亚洲": true, "欧洲": true, "北美洲": true, "南美洲": true, "非洲": true, "大洋洲": true, "南极洲": true,
+	"Asia": true, "Europe": true, "North America": true, "South America": true, "Africa": true, "Oceania": true, "Antarctica": true,
+	"内网IP": true,
+}
+
 func parseRegion(ip, region string) IPInfo {
 	info := IPInfo{
 		IP:     ip,
 		Region: region,
 	}
 	parts := strings.Split(region, "|")
-	if len(parts) >= 1 {
-		info.Country = cleanZero(parts[0])
-	}
-	if len(parts) >= 2 {
-		info.Province = cleanZero(parts[1])
-	}
-	if len(parts) >= 3 {
-		info.City = cleanZero(parts[2])
-	}
-	if len(parts) >= 4 {
-		info.ISP = cleanZero(parts[3])
-	}
-	if len(parts) >= 5 {
-		info.Code = cleanZero(parts[4])
+
+	// Check if this is the 6 or 7-field format (fa1seut0pia / GeoCN / GeoLite2 format:
+	// 洲|国家|省份|城市|区县|ISP|网络类型)
+	is7Field := len(parts) >= 6 && (len(parts) >= 7 || continents[parts[0]] || parts[0] == "")
+
+	if is7Field {
+		info.Continent = cleanZero(parts[0])
+		info.Country = cleanZero(parts[1])
+		info.Province = cleanZero(parts[2])
+		info.City = cleanZero(parts[3])
+		info.District = cleanZero(parts[4])
+		info.ISP = cleanZero(parts[5])
+		if len(parts) >= 7 {
+			info.NetType = cleanZero(parts[6])
+		}
+		info.Code = lookupCountryCode(info.Country)
+	} else if len(parts) == 5 {
+		// Standard Lionsoul 5-field formats:
+		// Format A: 国家|省份|城市|ISP|Code (e.g. 中国|广东省|深圳市|电信|CN or Australia|Queensland|Brisbane|0|AU)
+		// Format B: 国家|区域|省份|城市|ISP (e.g. 中国|0|广东省|深圳市|电信)
+		last := cleanZero(parts[4])
+		if isAlpha2(last) {
+			info.Country = cleanZero(parts[0])
+			info.Province = cleanZero(parts[1])
+			info.City = cleanZero(parts[2])
+			info.ISP = cleanZero(parts[3])
+			info.Code = last
+		} else {
+			info.Country = cleanZero(parts[0])
+			info.Province = cleanZero(parts[2])
+			info.City = cleanZero(parts[3])
+			info.ISP = cleanZero(parts[4])
+			info.Code = lookupCountryCode(info.Country)
+		}
+	} else {
+		// Fallback for arbitrary lengths
+		if len(parts) >= 1 {
+			info.Country = cleanZero(parts[0])
+		}
+		if len(parts) >= 2 {
+			info.Province = cleanZero(parts[1])
+		}
+		if len(parts) >= 3 {
+			info.City = cleanZero(parts[2])
+		}
+		if len(parts) >= 4 {
+			info.ISP = cleanZero(parts[3])
+		}
+		if len(parts) >= 5 {
+			info.Code = cleanZero(parts[4])
+		}
+		if info.Code == "" || !isAlpha2(info.Code) {
+			if c := lookupCountryCode(info.Country); c != "" {
+				info.Code = c
+			}
+		}
 	}
 	return info
 }
@@ -356,13 +410,16 @@ func (a *App) handleBatchQuery(w http.ResponseWriter, r *http.Request) {
 
 			info := parseRegion(rawIP, region)
 			results[idx] = BatchIPResult{
-				IP:       info.IP,
-				Country:  info.Country,
-				Province: info.Province,
-				City:     info.City,
-				ISP:      info.ISP,
-				Code:     info.Code,
-				Region:   info.Region,
+				IP:        info.IP,
+				Continent: info.Continent,
+				Country:   info.Country,
+				Province:  info.Province,
+				City:      info.City,
+				District:  info.District,
+				ISP:       info.ISP,
+				NetType:   info.NetType,
+				Code:      info.Code,
+				Region:    info.Region,
 			}
 		}(i, ipStr)
 	}

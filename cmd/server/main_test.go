@@ -71,16 +71,60 @@ func TestExtractClientIP(t *testing.T) {
 }
 
 func TestParseRegion(t *testing.T) {
+	// 1. 7-field format (fa1seut0pia / GeoCN): sample query test case
+	sampleRegion := "亚洲|中国|江苏省|南京市|浦口区|电信|"
+	sampleIP := "203.0.113.189"
+	sampleInfo := parseRegion(sampleIP, sampleRegion)
+	if sampleInfo.Continent != "亚洲" || sampleInfo.Country != "中国" || sampleInfo.Province != "江苏省" ||
+		sampleInfo.City != "南京市" || sampleInfo.District != "浦口区" || sampleInfo.ISP != "电信" ||
+		sampleInfo.NetType != "" || sampleInfo.Code != "CN" {
+		t.Errorf("unexpected 7-field sample result: %+v", sampleInfo)
+	}
+
+	// 2. 7-field foreign IP: Google 8.8.8.8
+	googleRegion := "北美洲|美国||||谷歌云|AS15169"
+	googleInfo := parseRegion("8.8.8.8", googleRegion)
+	if googleInfo.Continent != "北美洲" || googleInfo.Country != "美国" || googleInfo.Province != "" ||
+		googleInfo.City != "" || googleInfo.District != "" || googleInfo.ISP != "谷歌云" ||
+		googleInfo.NetType != "AS15169" || googleInfo.Code != "US" {
+		t.Errorf("unexpected 7-field foreign result: %+v", googleInfo)
+	}
+
+	// 3. 7-field Anycast: 1.1.1.1
+	cfRegion := "|||||Cloudflare|AS13335"
+	cfInfo := parseRegion("1.1.1.1", cfRegion)
+	if cfInfo.Continent != "" || cfInfo.Country != "" || cfInfo.Province != "" ||
+		cfInfo.City != "" || cfInfo.District != "" || cfInfo.ISP != "Cloudflare" ||
+		cfInfo.NetType != "AS13335" || cfInfo.Code != "" {
+		t.Errorf("unexpected 7-field anycast result: %+v", cfInfo)
+	}
+
+	// 4. 5-field with ISO code
 	region := "中国|广东省|深圳市|电信|CN"
 	info := parseRegion("14.215.177.38", region)
 	if info.Country != "中国" || info.Province != "广东省" || info.City != "深圳市" || info.ISP != "电信" || info.Code != "CN" {
-		t.Errorf("unexpected parseRegion result: %+v", info)
+		t.Errorf("unexpected 5-field result: %+v", info)
 	}
 
+	// 5. 5-field with Area and cleanZero
 	regionZero := "美国|0|0|Cloudflare|US"
 	infoZero := parseRegion("1.1.1.1", regionZero)
 	if infoZero.Country != "美国" || infoZero.Province != "" || infoZero.City != "" || infoZero.ISP != "Cloudflare" || infoZero.Code != "US" {
 		t.Errorf("cleanZero failed: %+v", infoZero)
+	}
+
+	// 6. 5-field without code (country lookup)
+	regionArea := "中国|华南|广东省|广州市|联通"
+	infoArea := parseRegion("211.95.193.97", regionArea)
+	if infoArea.Country != "中国" || infoArea.Province != "广东省" || infoArea.City != "广州市" || infoArea.ISP != "联通" || infoArea.Code != "CN" {
+		t.Errorf("area format failed: %+v", infoArea)
+	}
+
+	// 7. Internal IP
+	internalRegion := "内网IP|内网IP|内网IP|私有网络C类||私有网络C类|"
+	internalInfo := parseRegion("192.168.1.1", internalRegion)
+	if internalInfo.Country != "内网IP" || internalInfo.City != "私有网络C类" || internalInfo.Code != "" {
+		t.Errorf("internal IP failed: %+v", internalInfo)
 	}
 }
 

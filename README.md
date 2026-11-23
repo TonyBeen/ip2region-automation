@@ -105,12 +105,15 @@ server {
   ```json
   {
     "ip": "114.114.114.114",
+    "continent": "亚洲",
     "country": "中国",
     "province": "江苏省",
     "city": "南京市",
-    "isp": "114DNS",
+    "district": "",
+    "isp": "",
+    "net_type": "",
     "code": "CN",
-    "region": "中国|江苏省|南京市|114DNS|CN"
+    "region": "亚洲|中国|江苏省|南京市|||"
   }
   ```
 
@@ -167,19 +170,27 @@ server {
 [
   {
     "ip": "1.1.1.1",
-    "country": "Australia",
-    "province": "Queensland",
-    "city": "Brisbane",
-    "code": "AU",
-    "region": "Australia|Queensland|Brisbane|0|AU"
+    "continent": "",
+    "country": "",
+    "province": "",
+    "city": "",
+    "district": "",
+    "isp": "Cloudflare",
+    "net_type": "AS13335",
+    "code": "",
+    "region": "|||||Cloudflare|AS13335"
   },
   {
     "ip": "8.8.8.8",
-    "country": "United States",
-    "province": "California",
-    "isp": "Google LLC",
+    "continent": "北美洲",
+    "country": "美国",
+    "province": "",
+    "city": "",
+    "district": "",
+    "isp": "谷歌云",
+    "net_type": "AS15169",
     "code": "US",
-    "region": "United States|California|0|Google LLC|US"
+    "region": "北美洲|美国||||谷歌云|AS15169"
   }
 ]
 ```
